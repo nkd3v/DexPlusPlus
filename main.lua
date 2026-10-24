@@ -3,7 +3,7 @@ local oldgame = oldgame or game
 local isFsSupported = readfile and writefile and isfile and isfolder and listfiles and delfile and delfolder
 
 -- Main vars
-local Main, Explorer, Properties, ScriptViewer, Console, SaveInstance, ModelViewer, SettingsWindow--[[, SecretServicePanel]], DefaultSettings, Notebook, Serializer, Lib local ggv = getgenv or nil
+local Main, Explorer, Properties, TagList, ScriptViewer, Console, SaveInstance, ModelViewer, SettingsWindow--[[, SecretServicePanel]], DefaultSettings, Notebook, Serializer, Lib local ggv = getgenv or nil
 local API, RMD
 
 -- Default Settings
@@ -142,11 +142,11 @@ end
 Main = (function()
 	local Main = {}
 
-	Main.ModuleList = {"Tags","Explorer","Properties","ScriptViewer","Console","SaveInstance","ModelViewer","SettingsWindow"}
+	Main.ModuleList = {"Tags","Explorer","Properties","TagList","ScriptViewer","Console","SaveInstance","ModelViewer","SettingsWindow"}
 	Main.Elevated = false
 	Main.AllowDraggableOnMobile = true
 	Main.MissingEnv = {}
-	Main.Version = "3.1.3"
+	Main.Version = "3.2.0"
 	Main.Mouse = plr:GetMouse()
 	Main.AppControls = {}
 	Main.Apps = Apps
@@ -393,6 +393,7 @@ Main = (function()
 		-- Init Major Apps and define them in modules
 		Explorer = Apps.Explorer
 		Properties = Apps.Properties
+		TagList = Apps.TagList
 		ScriptViewer = Apps.ScriptViewer
 		Console = Apps.Console
 		SaveInstance = Apps.SaveInstance
@@ -405,6 +406,7 @@ Main = (function()
 		local appTable = {
 			Explorer = Explorer,
 			Properties = Properties,
+			TagList = TagList,
 			ScriptViewer = ScriptViewer,
 			Console = Console,
 			SaveInstance = SaveInstance,
@@ -1427,6 +1429,10 @@ Main = (function()
 
 		Main.CreateApp({Name = "Properties", IconMap = Main.LargeIcons, Icon = "Properties", Open = true, Window = Properties.Window})
 
+		-- Not every class icon pack has a CollectionService icon.
+		local tagIcon = Explorer.ClassIcons.IndexDict and Explorer.ClassIcons.IndexDict.CollectionService and "CollectionService" or "Folder"
+		Main.CreateApp({Name = "Tag List", IconMap = Explorer.ClassIcons, Icon = tagIcon, Window = TagList.Window})
+
 		local cptsOnMouseClick = nil
 		Main.CreateApp({Name = "Click part to select", IconMap = Explorer.ClassIcons, Icon = "SelectionBox", OnClick = function(callback)
 			if callback then
@@ -1575,6 +1581,7 @@ Main = (function()
 		intro.SetProgress("Initializing Modules",0.8)
 		Explorer.Init()
 		Properties.Init()
+		TagList.Init()
 		ScriptViewer.Init()
 		Console.Init()
 		SaveInstance.Init()

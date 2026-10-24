@@ -1017,10 +1017,7 @@ local function main()
 		end
 		context:Clear()
 		context:Add({Name = "Find objects with this tag", OnClick = function()
-			-- Quote delimiters so tag names containing &&, || or parentheses are literal.
-			local query = "/tag "..string.format("%q",prop.TagName)
-			Explorer.GuiElems.SearchBar.Text = query
-			Explorer.DoSearch(query)
+			Explorer.SearchTag(prop.TagName)
 		end})
 		context:Add({Name = "Add to all selected", OnClick = function()
 			local ok,message = Properties.SetTag(prop.TagName,true)
