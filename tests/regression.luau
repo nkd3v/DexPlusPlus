@@ -360,6 +360,17 @@ test("built header fallback preserves game references without registry support",
 		assert(rawequal(refs.Game,game) and rawequal(refs.OldGame,game))
 	end
 end)
+test("built header keeps the real game root when the executor provides cloneref",function()
+	-- Executor clonerefs return new handles that are not == to the original.
+	local env = setmetatable({
+		game = game, workspace = {Parent = game},
+		cloneref = function() return newproxy() end,
+	}, {__index = getfenv()})
+	local chunk = assert(loadstring(sources.Header))
+	setfenv(chunk,env)
+	local refs = chunk()
+	assert(rawequal(refs.Game,game) and rawequal(refs.OldGame,game))
+end)
 
 local function explorerTreeFixture(elevated)
 	-- Model distinct cloneref handles that compare equal but hash separately.

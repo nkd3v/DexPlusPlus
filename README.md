@@ -5,6 +5,7 @@ Dex++ is an extended version of Moon's Dex, made to fulfill some Moon's Dex prop
 
 ## Tags and Quality of Life
 
+- **3.1.3 explorer fix:** Fix the tree still showing only Nil Instances on executors with a real `cloneref` (such as Opiumware). Like the original Dex++ release, the Explorer now uses the real DataModel as its root instead of a cloned handle, so services attach to it again.
 - **3.1.2 explorer fix:** Fix the tree showing only Nil Instances when cloned game references differ as table keys. Service discovery and reparenting now use a consistent root reference. The built script also uses the corrected `cloneref` fallback.
 - **3.1.1 teleport fix:** Teleport To now moves the whole character consistently, supports custom character roots and uncached model parts, preserves rotation, and honors `TeleportToOffset`. Solid targets get explicit clearance above their surface instead of an obstruction-dependent `MoveTo` destination. Missing characters and failed moves produce a warning in the output instead of silently doing nothing.
 - Search for an exact, case-sensitive CollectionService tag with `/tag Enemy` or `/tag "Quest Item"`.

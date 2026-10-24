@@ -1,6 +1,6 @@
 --[[
 	Dex++
-	Version 3.1.2
+	Version 3.1.3
 	
 	Developed by Chillz
 	
@@ -40,5 +40,8 @@ cloneref = cloneref or (function()
 	end
 end)()
 
-local oldgame = cloneref(game)
-local game = cloneref(workspace.Parent)
+-- Keep the real DataModel as the explorer root, as the original release does.
+-- A cloneref'd root is a different object from the parent Roblox returns, so
+-- services never attach to it and only Nil Instances is shown.
+local oldgame = game
+local game = workspace.Parent
