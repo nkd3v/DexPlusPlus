@@ -45,7 +45,9 @@ local function main()
 	local idCounter = 0
 	local scrollV,scrollH,clipboard
 	local renameBox,renamingNode,searchFunc
-	local sortingEnabled,autoUpdateSearch
+	local tagSearchConnection,searchRefreshPending
+	local activeQuery = ""
+	local sortingEnabled,autoUpdateSearch = nil,Settings.Explorer.AutoUpdateSearch
 	local table,math = table,math
 	local nilMap,nilCons = {},{}
 	local connectSignal = game.DescendantAdded.Connect
@@ -1830,16 +1832,52 @@ local function main()
 		Explorer.InsertObjectContext = context
 	end
 	
+	Explorer.UnquoteSearchTerm = function(str)
+		local sub = string.sub
+		local len = #str
+		if sub(str,1,1) ~= '"' or sub(str,len,len) ~= '"' then return end
+		local out = {}
+		local i = 2
+		local escapes = {n = "\n", r = "\r", t = "\t", a = "\a", b = "\b", f = "\f", v = "\v"}
+		while i < len do
+			local char = sub(str,i,i)
+			if char == "\\" and i+1 < len then
+				i += 1
+				char = sub(str,i,i)
+				local digits = sub(str,i,len-1):match("^%d%d?%d?")
+				if digits then
+					local byte = tonumber(digits)
+					if byte > 255 then return end
+					char = string.char(byte)
+					i += #digits-1
+				else
+					char = escapes[char] or char
+				end
+			end
+			out[#out+1] = char
+			i += 1
+		end
+		return table.concat(out)
+	end
+
 	--[[
 		Headers, Setups, Predicate, ObjectDefs
 	]]
 	Explorer.SearchFilters = { -- TODO: Use data table (so we can disable some if funcs don't exist)
 		Comparison = {
+			["tag"] = function(argString)
+				if #argString == 0 then return end
+				return {
+					Headers = {"local hasTag = service.CollectionService.HasTag", "local collection = service.CollectionService"},
+					Predicate = "hasTag(collection,obj,"..string.format("%q",argString)..")",
+					TagNames = {argString},
+				}
+			end,
 			["isa"] = function(argString)
 				local lower = string.lower
 				local find = string.find
 				local classQuery = string.split(argString)[1]
-				if not classQuery then return end
+				if not classQuery or #classQuery == 0 then return end
 				classQuery = lower(classQuery)
 
 				local className
@@ -1873,7 +1911,7 @@ local function main()
 			end,
 			["rad"] = function(argString)
 				local num = tonumber(argString)
-				if not num then return end
+				if not num or num < 0 or num ~= num or num == math.huge then return end
 
 				if not service.Players.LocalPlayer.Character or not service.Players.LocalPlayer.Character:FindFirstChild("HumanoidRootPart") or not service.Players.LocalPlayer.Character.HumanoidRootPart:IsA("BasePart") then return end
 
@@ -1894,20 +1932,12 @@ local function main()
 			end,
 		},
 		Default = function(argString,caseSensitive)
-			local cleanString = argString:gsub("\"","\\\""):gsub("\n","\\n")
-			if caseSensitive then
-				return {
-					Headers = {"local find = string.find"},
-					ObjectDefs = {"local objName = tostring(obj)"},
-					Predicate = "find(objName,\"" .. cleanString .. "\",1,true)"
-				}
-			else
-				return {
-					Headers = {"local lower = string.lower","local find = string.find","local tostring = tostring"},
-					ObjectDefs = {"local lowerName = lower(tostring(obj))"},
-					Predicate = "find(lowerName,\"" .. cleanString:lower() .. "\",1,true)"
-				}
-			end
+			local literal = string.format("%q",caseSensitive and argString or argString:lower())
+			return {
+				Headers = {"local lower = string.lower", "local find = string.find", "local tostring = tostring"},
+				ObjectDefs = {caseSensitive and "local objName = tostring(obj)" or "local lowerName = lower(tostring(obj))"},
+				Predicate = "find("..(caseSensitive and "objName" or "lowerName")..","..literal..",1,true)",
+			}
 		end,
 		SpecificDefault = function(n)
 			return {
@@ -1919,7 +1949,7 @@ local function main()
 	}
 
 	Explorer.BuildSearchFunc = function(query)
-		local specFilterList,specMap = {},{}
+		local specFilterList,specMap,tagNames = {},{},{}
 		local finalPredicate = ""
 		local rep = string.rep
 		local formatQuery = query:gsub("\\.","  "):gsub('".-"',function(str) return rep(" ",#str) end)
@@ -1943,6 +1973,9 @@ local function main()
 		local lastOp = nil
 
 		local function processFilter(dat)
+			if dat.TagNames then
+				for _, tag in ipairs(dat.TagNames) do tagNames[tag] = true end
+			end
 			if dat.Headers then
 				local t = dat.Headers
 				for i = 1,#t do
@@ -1964,7 +1997,7 @@ local function main()
 				end
 			end
 
-			finalPredicate = finalPredicate..dat.Predicate
+			finalPredicate = finalPredicate.."("..dat.Predicate..")"
 		end
 
 		local found = {}
@@ -1994,12 +2027,7 @@ local function main()
 		table.sort(found)
 		table.insert(found,#formatQuery+1)
 
-		local function inQuotes(str)
-			local len = #str
-			if sub(str,1,1) == '"' and sub(str,len,len) == '"' then
-				return sub(str,2,len-1)
-			end
-		end
+		local inQuotes = Explorer.UnquoteSearchTerm
 
 		for i = 1,#found do
 			local nextInd = found[i]
@@ -2008,6 +2036,10 @@ local function main()
 			local term = sub(query,init,nextInd-1)
 			term = match(term,"^%s*(.-)%s*$") or "" -- Trim
 
+			if term == "!" and op == "(" then
+				finalPredicate = finalPredicate.."not "
+				term = ""
+			end
 			if #term > 0 then
 				if sub(term,1,1) == "!" then
 					term = sub(term,2)
@@ -2026,7 +2058,7 @@ local function main()
 						local specFunc = specifier and specFilters[specifier]
 
 						if compFunc then
-							local argStr = sub(term,y+2)
+							local argStr = sub(term,y+1):match("^%s*(.-)%s*$")
 							local ret = compFunc(inQuotes(argStr) or argStr)
 							if ret then
 								processFilter(ret)
@@ -2034,7 +2066,7 @@ local function main()
 								finalPredicate = finalPredicate.."false"
 							end
 						elseif specFunc then
-							local argStr = sub(term,y+2)
+							local argStr = sub(term,y+1):match("^%s*(.-)%s*$")
 							local ret = specFunc(inQuotes(argStr) or argStr)
 							if ret then
 								if not specMap[term] then
@@ -2086,6 +2118,7 @@ local function search(root)
 	for i = 1,#root do
 		local node = root[i]
 		local obj = node.Obj
+		if node.Del then continue end
 		
 %s
 		
@@ -2116,10 +2149,32 @@ return search]==]
 			["service"] = service},{__index = getfenv()})
 		setfenv(func,env)
 
-		return func(),specFilterList
+		local tags = {}
+		for tag in pairs(tagNames) do tags[#tags+1] = tag end
+		local ok,search = pcall(func)
+		if not ok then return nil,specFilterList end
+		return search,specFilterList,tags
 	end
 
 	Explorer.DoSearch = function(query)
+		query = query:match("^%s*(.-)%s*$")
+		local compiled,specFilters,tagNames
+		if #query > 0 and Main.Elevated then
+			compiled,specFilters,tagNames = Explorer.BuildSearchFunc(query)
+			if not compiled then
+				Explorer.SearchError = "Invalid search expression"
+				if Explorer.GuiElems.SearchBar then
+					Explorer.GuiElems.SearchBar.TextColor3 = Settings.Theme.Important
+				end
+				return false
+			end
+		end
+		Explorer.SearchError = nil
+		activeQuery = query
+		if Explorer.GuiElems.SearchBar then
+			Explorer.GuiElems.SearchBar.TextColor3 = Settings.Theme.Text
+		end
+		if tagSearchConnection then tagSearchConnection:Disconnect() tagSearchConnection = nil end
 		table.clear(Explorer.SearchExpanded)
 		table.clear(searchResults)
 		expanded = (#query == 0 and Explorer.Expanded or Explorer.SearchExpanded)
@@ -2127,21 +2182,26 @@ return search]==]
 
 		if #query > 0 then	
 			local expandTable = Explorer.SearchExpanded
-			local specFilters
 
 			local lower = string.lower
 			local find = string.find
 			local tostring = tostring
 
 			local lowerQuery = lower(query)
+			local basicTag = query:match("^/[Tt][Aa][Gg]%s+(.+)$")
+			if basicTag then
+				basicTag = Explorer.UnquoteSearchTerm(basicTag) or basicTag
+				if not Main.Elevated then tagNames = {basicTag} end
+			end
 
 			local function defaultSearch(root)
 				local expandedpar = false
 				for i = 1,#root do
 					local node = root[i]
 					local obj = node.Obj
+					if node.Del then continue end
 
-					if find(lower(tostring(obj)),lowerQuery,1,true) then
+					if (basicTag and Apps.Tags.Has(obj,basicTag)) or (not basicTag and find(lower(tostring(obj)),lowerQuery,1,true)) then
 						expandTable[node] = 0
 						searchResults[node] = true
 						if not expandedpar then
@@ -2161,7 +2221,7 @@ return search]==]
 
 			if Main.Elevated then
 				local start = tick()
-				searchFunc,specFilters = Explorer.BuildSearchFunc(query)
+				searchFunc = compiled
 				--print("BUILD SEARCH",tick()-start)
 			else
 				searchFunc = defaultSearch
@@ -2172,7 +2232,8 @@ return search]==]
 				for i = 1,#specFilters do -- Specific search filers that returns list of matches
 					local resMap = {}
 					specResults[i] = resMap
-					local objs = specFilters[i]()
+					local ok,objs = pcall(specFilters[i])
+					if not ok or type(objs) ~= "table" then objs = {} end
 					for c = 1,#objs do
 						local node = nodes[objs[c]]
 						if node then
@@ -2190,13 +2251,25 @@ return search]==]
 			end
 		end
 
+		if tagNames and #tagNames > 0 and autoUpdateSearch then
+			tagSearchConnection = Apps.Tags.Watch(function() Explorer.QueueSearchRefresh() end,tagNames)
+		end
 		Explorer.ForceUpdate()
+		return true
+	end
+
+	Explorer.QueueSearchRefresh = function()
+		if searchRefreshPending or #activeQuery == 0 or not autoUpdateSearch then return end
+		searchRefreshPending = true
+		task.defer(function()
+			searchRefreshPending = false
+			if #activeQuery > 0 then Explorer.DoSearch(activeQuery) end
+		end)
 	end
 
 	Explorer.ClearSearch = function()
 		Explorer.GuiElems.SearchBar.Text = ""
-		expanded = Explorer.Expanded
-		searchFunc = nil
+		Explorer.DoSearch("")
 	end
 
 	Explorer.InitSearch = function()
@@ -2207,6 +2280,13 @@ return search]==]
 
 		searchBox.FocusLost:Connect(function()
 			Explorer.DoSearch(searchBox.Text)
+		end)
+		Explorer.GuiElems.ToolBar.SearchFrame.Reset.MouseButton1Click:Connect(Explorer.ClearSearch)
+		searchBox.InputBegan:Connect(function(input)
+			if input.KeyCode == Enum.KeyCode.Escape then
+				Explorer.ClearSearch()
+				searchBox:ReleaseFocus()
+			end
 		end)
 	end
 
@@ -2481,7 +2561,7 @@ return search]==]
 			{1,"Folder",{Name="ExplorerItems",}},
 			{2,"Frame",{BackgroundColor3=Color3.new(0.20392157137394,0.20392157137394,0.20392157137394),BorderSizePixel=0,Name="ToolBar",Parent={1},Size=UDim2.new(1,0,0,22),}},
 			{3,"Frame",{BackgroundColor3=Color3.new(0.14901961386204,0.14901961386204,0.14901961386204),BorderColor3=Color3.new(0.1176470592618,0.1176470592618,0.1176470592618),BorderSizePixel=0,Name="SearchFrame",Parent={2},Position=UDim2.new(0,3,0,1),Size=UDim2.new(1,-6,0,18),}},
-			{4,"TextBox",{BackgroundColor3=Color3.new(1,1,1),BackgroundTransparency=1,ClearTextOnFocus=false,Font=3,Name="SearchBox",Parent={3},PlaceholderColor3=Color3.new(0.39215689897537,0.39215689897537,0.39215689897537),PlaceholderText="Search workspace",Position=UDim2.new(0,4,0,0),Size=UDim2.new(1,-24,0,18),Text="",TextColor3=Color3.new(1,1,1),TextSize=14,TextXAlignment=0,}},
+			{4,"TextBox",{BackgroundColor3=Color3.new(1,1,1),BackgroundTransparency=1,ClearTextOnFocus=false,Font=3,Name="SearchBox",Parent={3},PlaceholderColor3=Color3.new(0.39215689897537,0.39215689897537,0.39215689897537),PlaceholderText="Search name or /tag TagName",Position=UDim2.new(0,4,0,0),Size=UDim2.new(1,-24,0,18),Text="",TextColor3=Color3.new(1,1,1),TextSize=14,TextXAlignment=0,}},
 			{5,"UICorner",{CornerRadius=UDim.new(0,2),Parent={3},}},
 			{6,"UIStroke",{Thickness=1.4,Parent={3},Color=Color3.fromRGB(42,42,42)}},
 			{7,"TextButton",{AutoButtonColor=false,BackgroundColor3=Color3.new(0.12549020349979,0.12549020349979,0.12549020349979),BackgroundTransparency=1,BorderSizePixel=0,Font=3,Name="Reset",Parent={3},Position=UDim2.new(1,-17,0,1),Size=UDim2.new(0,16,0,16),Text="",TextColor3=Color3.new(1,1,1),TextSize=14,}},

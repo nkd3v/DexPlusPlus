@@ -1,32 +1,22 @@
-import os
+"""Build the self-contained Dex++ script, independent of the working directory."""
 
-headerText = open("header.lua","r")
-embedStr = headerText.read() + "\n\nlocal EmbeddedModules = {\n"
-headerText.close()
-
-files = os.listdir("modules")
+from pathlib import Path
+from typing import Optional
 
 
-def readfile(path):
-    file = open(path,"r")
-    str = file.read()
-    file.close()
-    return str
+def build(root: Optional[Path] = None) -> Path:
+    root = root or Path(__file__).resolve().parent
+    chunks = [root.joinpath("header.lua").read_text(encoding="utf-8")]
+    chunks.append("\n\nlocal EmbeddedModules = {\n")
+    for path in sorted(root.joinpath("modules").glob("*.lua")):
+        source = path.read_text(encoding="utf-8")
+        chunks.append(f'["{path.stem}"] = function()\n{source}\nend,\n')
+    chunks.extend(["}\n", root.joinpath("main.lua").read_text(encoding="utf-8")])
+    output = root / "out.lua"
+    with output.open("w", encoding="utf-8", newline="\n") as stream:
+        stream.write("".join(chunks))
+    return output
 
-def addModuleFile(path):
-    global embedStr
 
-    moduleName = os.path.splitext(os.path.basename(path))[0]
-    moduleSource = readfile(path)
-
-    embedStr = embedStr + '["' + moduleName + '"] = function()\n' + moduleSource + '\nend,\n'
-
-for filename in files:
-    addModuleFile("modules/" + filename)
-
-embedStr = embedStr + "}"
-embedStr = embedStr + "\n" + readfile("main.lua")
-
-file = open("out.lua","w")
-file.write(embedStr)
-file.close()
+if __name__ == "__main__":
+    print(f"Built {build()}")

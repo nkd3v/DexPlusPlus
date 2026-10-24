@@ -36,10 +36,12 @@ local function main()
 
 	local window, toolBar, propsFrame
 	local scrollV, scrollH
-	local categoryOrder
+	local categoryOrder = API.CategoryOrder
 	local props,viewList,expanded,indexableProps,propEntries,autoUpdateObjs = {},{},{},{},{},{}
 	local inputBox,inputTextBox,inputProp
 	local checkboxes,propCons = {},{}
+	local tagConnection,tagRefreshPending
+	local tagObjects = {}
 	local table,string = table,string
 	local getPropChangedSignal = game.GetPropertyChangedSignal
 	local getAttributeChangedSignal = game.GetAttributeChangedSignal
@@ -59,6 +61,7 @@ local function main()
 	Properties.SearchText = ""
 
 	Properties.AddAttributeProp = {Category = "Attributes", Class = "", Name = "", SpecialRow = "AddAttribute", Tags = {}}
+	Properties.AddTagProp = {Category = "Tags", Class = "", Name = "Add Tag", SpecialRow = "AddTag", Tags = {}}
 	Properties.SoundPreviewProp = {Category = "Data", ValueType = {Name = "SoundPlayer"}, Class = "Sound", Name = "Preview", Tags = {}}
 
 	Properties.IgnoreProps = {
@@ -307,7 +310,10 @@ local function main()
 					for c = 1,#classList do
 						local obj = classList[c]
 						if not firstSet then
-							if isAttribute then
+							if prop.IsTag then
+								firstVal = Apps.Tags.Has(obj,prop.TagName)
+								firstObj,firstSet = obj,true
+							elseif isAttribute then
 								firstVal = getAttribute(obj,attributeName)
 								if firstVal ~= nil then
 									firstObj = obj
@@ -321,7 +327,9 @@ local function main()
 							if ignored then break end
 						else
 							local propVal,skip
-							if isAttribute then
+							if prop.IsTag then
+								propVal = Apps.Tags.Has(obj,prop.TagName)
+							elseif isAttribute then
 								propVal = getAttribute(obj,attributeName)
 								if propVal == nil then skip = true end
 							else
@@ -385,6 +393,40 @@ local function main()
 		if p then
 			Properties.Refresh()
 		end
+	end
+
+	Properties.WatchTags = function()
+		local selected = Explorer.Selection.List
+		local changed = #selected ~= #tagObjects
+		for i,node in ipairs(selected) do
+			if tagObjects[i] ~= node.Obj then changed = true break end
+		end
+		if not changed then return end
+		if tagConnection then tagConnection:Disconnect() tagConnection = nil end
+		table.clear(tagObjects)
+		local objectMap = {}
+		for i,node in ipairs(selected) do
+			tagObjects[i] = node.Obj
+			objectMap[node.Obj] = true
+		end
+		if #selected == 0 then return end
+		tagConnection = Apps.Tags.Watch(function(obj)
+			if (obj and not objectMap[obj]) or tagRefreshPending then return end
+			tagRefreshPending = true
+			task.defer(function()
+				tagRefreshPending = false
+				Properties.ShowExplorerProps()
+			end)
+		end)
+	end
+
+	Properties.SetTag = function(tag,enabled)
+		local objects = {}
+		for _,node in ipairs(Explorer.Selection.List) do objects[#objects+1] = node.Obj end
+		if #objects == 0 then return false,"Select an object first" end
+		local ok,message = Apps.Tags.Set(objects,tag,enabled)
+		Properties.ShowExplorerProps()
+		return ok,message
 	end
 
 	-- Fetches the properties to be displayed based on the explorer selection
@@ -462,16 +504,31 @@ local function main()
 			end
 		end
 
+		-- Show the union of selected objects' tags, with conflicts for partial membership.
+		local foundTags = {}
+		for _, node in ipairs(sList) do
+			for _, tag in ipairs(Apps.Tags.Get(node.Obj)) do
+				if not foundTags[tag] then
+					foundTags[tag] = true
+					props[#props+1] = {IsTag = true, TagName = tag, Name = "TAG_"..tag,
+						DisplayName = tag, Class = "Instance", Category = "Tags",
+						ValueType = {Name = "bool"}, Tags = {}}
+				end
+			end
+		end
+
 		table.sort(props,function(a,b)
 			if a.Category ~= b.Category then
-				return (categoryOrder[a.Category] or 9999) < (categoryOrder[b.Category] or 9999)
+				local aOrder,bOrder = categoryOrder[a.Category] or 9999,categoryOrder[b.Category] or 9999
+				return aOrder < bOrder or (aOrder == bOrder and a.Category < b.Category)
 			else
 				local aOrder = (RMDCustomOrders[a.Class] and RMDCustomOrders[a.Class][a.Name]) or 9999999
 				local bOrder = (RMDCustomOrders[b.Class] and RMDCustomOrders[b.Class][b.Name]) or 9999999
 				if aOrder ~= bOrder then
 					return aOrder < bOrder
 				else
-					return lower(a.Name) < lower(b.Name)
+					local aName,bName = lower(a.Name),lower(b.Name)
+					return aName < bName or (aName == bName and a.Name < b.Name)
 				end
 			end
 		end)
@@ -481,9 +538,27 @@ local function main()
 		Properties.ComputeConflicts()
 		--warn("CONFLICT",tick()-start)
 		if #props > 0 then
-			props[#props+1] = Properties.AddAttributeProp
+			local index = #props+1
+			for i,prop in ipairs(props) do
+				if prop.Category == "Attributes" then
+					index = i+1
+				elseif prop.Category == "Tags" and index == #props+1 then
+					index = i
+					break
+				end
+			end
+			table.insert(props,index,Properties.AddAttributeProp)
+		end
+		if #sList > 0 then
+			-- Insert within the Tags category so category headers stay contiguous.
+			local index = #props+1
+			for i,prop in ipairs(props) do
+				if prop.Category == "Tags" then index = i+1 end
+			end
+			table.insert(props,index,Properties.AddTagProp)
 		end
 
+		Properties.WatchTags()
 		Properties.Update()
 		Properties.Refresh()
 	end
@@ -624,7 +699,7 @@ local function main()
 
 				local visible
 				if searchText and depth == 1 then
-					if find(lower(propName),searchText,1,true) then
+					if find(lower(prop.DisplayName or propName),searchText,1,true) or find(lower(category),searchText,1,true) then
 						visible = true
 					end
 				else
@@ -790,14 +865,19 @@ local function main()
 		end)
 
 		newEntry.RowButton.MouseButton1Click:Connect(function()
-			Properties.DisplayAddAttributeWindow()
+			local prop = viewList[index + Properties.Index]
+			if prop and prop.SpecialRow == "AddTag" then
+				Properties.DisplayAddTagWindow()
+			else
+				Properties.DisplayAddAttributeWindow()
+			end
 		end)
 
 		newEntry.EditAttributeButton.MouseButton1Down:Connect(function()
 			local prop = viewList[index + Properties.Index]
 			if not prop then return end
 
-			Properties.DisplayAttributeContext(prop)
+			if prop.IsTag then Properties.DisplayTagContext(prop) else Properties.DisplayAttributeContext(prop) end
 		end)
 
 		valueFrame.SoundPreview.ControlButton.MouseButton1Click:Connect(function()
@@ -927,6 +1007,88 @@ local function main()
 		end
 	end
 
+	Properties.DisplayTagContext = function(prop)
+		local context = Properties.TagContext
+		if not context then
+			context = Lib.ContextMenu.new()
+			context.Iconless = true
+			context.Width = 180
+			Properties.TagContext = context
+		end
+		context:Clear()
+		context:Add({Name = "Find objects with this tag", OnClick = function()
+			-- Quote delimiters so tag names containing &&, || or parentheses are literal.
+			local query = "/tag "..string.format("%q",prop.TagName)
+			Explorer.GuiElems.SearchBar.Text = query
+			Explorer.DoSearch(query)
+		end})
+		context:Add({Name = "Add to all selected", OnClick = function()
+			local ok,message = Properties.SetTag(prop.TagName,true)
+			if not ok then warn("Dex++: "..message) end
+		end})
+		context:Add({Name = "Remove from selected", OnClick = function()
+			local ok,message = Properties.SetTag(prop.TagName,false)
+			if not ok then warn("Dex++: "..message) end
+		end})
+		if env.setclipboard then
+			context:Add({Name = "Copy tag name", OnClick = function() env.setclipboard(prop.TagName) end})
+			context:Add({Name = "Copy object's tag list", OnClick = function()
+				local node = Explorer.Selection.List[1]
+				if node then env.setclipboard(table.concat(Apps.Tags.Get(node.Obj),"\n")) end
+			end})
+		end
+		context:Show()
+	end
+
+	Properties.DisplayAddTagWindow = function()
+		local win = Properties.AddTagWindow
+		if not win then
+			win = Lib.Window.new()
+			win.Alignable = false
+			win.Resizable = false
+			win:SetTitle("Add Tag to Selected Objects")
+			win:SetSize(280,100)
+			local nameBox = Lib.ViewportTextBox.new()
+			nameBox.Position = UDim2.new(0,5,0,10)
+			nameBox.Size = UDim2.new(1,-10,0,20)
+			win:Add(nameBox,"NameBox")
+			local errorLabel = Lib.Label.new()
+			errorLabel.Text = ""
+			errorLabel.TextColor3 = Settings.Theme.Important
+			errorLabel.Position = UDim2.new(0,5,0,35)
+			errorLabel.Size = UDim2.new(1,-10,0,20)
+			win:Add(errorLabel,"Error")
+			local addButton = Lib.Button.new()
+			addButton.Text = "Add Tag"
+			addButton.Position = UDim2.new(0,5,1,-25)
+			addButton.Size = UDim2.new(0.5,-8,0,20)
+			local function submit()
+				local ok,message = Properties.SetTag(nameBox:GetText(),true)
+				if ok then win:Close() else errorLabel.Text = message end
+			end
+			addButton.OnClick:Connect(submit)
+			win:Add(addButton,"AddButton")
+			nameBox.TextBox:GetPropertyChangedSignal("Text"):Connect(function()
+				addButton:SetDisabled(#nameBox:GetText() == 0)
+			end)
+			nameBox.TextBox.FocusLost:Connect(function(enterPressed)
+				if enterPressed then submit() end
+			end)
+			local cancelButton = Lib.Button.new()
+			cancelButton.Text = "Cancel"
+			cancelButton.Position = UDim2.new(0.5,3,1,-25)
+			cancelButton.Size = UDim2.new(0.5,-8,0,20)
+			cancelButton.OnClick:Connect(function() win:Close() end)
+			win:Add(cancelButton)
+			Properties.AddTagWindow = win
+		end
+		win.Elements.NameBox:SetText("")
+		win.Elements.Error.Text = ""
+		win.Elements.AddButton:SetDisabled(true)
+		win:Show()
+		win.Elements.NameBox.TextBox:CaptureFocus()
+	end
+
 	Properties.DisplayAttributeContext = function(prop)
 		local context = Properties.AttributeContext
 		if not context then
@@ -934,6 +1096,7 @@ local function main()
 			context.Iconless = true
 			context.Width = 80
 		end
+		Properties.AttributeContext = context
 		context:Clear()
 
 		context:Add({Name = "Edit", OnClick = function()
@@ -1221,7 +1384,9 @@ local function main()
 		if not obj then return end
 
 		local propVal
-		if prop.IsAttribute then
+		if prop.IsTag then
+			return Apps.Tags.Has(obj,prop.TagName)
+		elseif prop.IsAttribute then
 			propVal = getAttribute(obj,prop.AttributeName)
 			if propVal == nil then return nil end
 
@@ -1423,9 +1588,10 @@ local function main()
 				entry.Size = UDim2.new(scaleType == 0 and 0 or 1, scaleType == 0 and Properties.ViewWidth + valueWidth or 0,0,22)
 
 				if prop.SpecialRow then
-					if prop.SpecialRow == "AddAttribute" then
+					if prop.SpecialRow == "AddAttribute" or prop.SpecialRow == "AddTag" then
 						nameFrame.Visible = false
 						valueFrame.Visible = false
+						guiElems.RowButton.Text = prop.SpecialRow == "AddTag" and "Add Tag" or "Add Attribute"
 						guiElems.RowButton.Visible = true
 					end
 				else
@@ -1464,8 +1630,8 @@ local function main()
 						local tags = prop.Tags
 						local propObj = autoUpdateObjs[gName]
 
-						local attributeOffset = (prop.IsAttribute and 20 or 0)
-						editAttributeButton.Visible = (prop.IsAttribute and not prop.RootType)
+						local attributeOffset = ((prop.IsAttribute or prop.IsTag) and 20 or 0)
+						editAttributeButton.Visible = ((prop.IsAttribute or prop.IsTag) and not prop.RootType)
 						toggleAttributes.Visible = false
 
 						-- Moving around the frames
@@ -1490,7 +1656,7 @@ local function main()
 
 						-- Display property value
 						Properties.DisplayProp(prop,i)
-						if propObj then
+						if propObj and not prop.IsTag then
 							if prop.IsAttribute then
 								propCons[#propCons+1] = getAttributeChangedSignal(propObj,prop.AttributeName):Connect(function()
 									Properties.DisplayProp(prop,i)
@@ -1570,6 +1736,11 @@ local function main()
 	end
 
 	Properties.SetProp = function(prop,val,noupdate,prevAttribute)
+		if prop.IsTag then
+			local ok,message = Properties.SetTag(prop.TagName,val == true)
+			if not ok then warn("Dex++: "..message) end
+			return
+		end
 		local sList = Explorer.Selection.List
 		local propName = prop.Name
 		local subName = prop.SubName
@@ -1598,9 +1769,9 @@ local function main()
 
 					if prevAttribute then
 						if prevAttribute.ValueType.Name == typeName then
-							setVal = getAttribute(obj,prevAttribute.AttributeName) or setVal
+							local previous = getAttribute(obj,prevAttribute.AttributeName)
+							if previous ~= nil then setVal = previous end
 						end
-						setAttribute(obj,prevAttribute.AttributeName,nil)
 					end
 
 					if rootTypeName then
@@ -1677,6 +1848,9 @@ local function main()
 
 					if prop.IsAttribute then
 						setAttribute(obj,attributeName,setVal)
+						if prevAttribute and prevAttribute.AttributeName ~= attributeName then
+							setAttribute(obj,prevAttribute.AttributeName,nil)
+						end
 					else
 						obj[propName] = setVal
 					end
@@ -1763,6 +1937,12 @@ local function main()
 
 		Lib.ViewportTextBox.convert(searchBox)
 
+		Properties.GuiElems.ToolBar.SearchFrame.Reset.MouseButton1Click:Connect(function()
+			searchBox.Text = ""
+		end)
+		searchBox.InputBegan:Connect(function(input)
+			if input.KeyCode == Enum.KeyCode.Escape then searchBox.Text = "" searchBox:ReleaseFocus() end
+		end)
 		searchBox:GetPropertyChangedSignal("Text"):Connect(function()
 			Properties.SearchText = searchBox.Text
 			Properties.Update()
@@ -1840,6 +2020,7 @@ local function main()
 				expanded["CAT_"..category] = true
 			end
 		end
+		expanded["CAT_Tags"] = true
 		expanded["Sound.SoundId"] = true
 
 		-- Init window

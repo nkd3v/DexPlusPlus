@@ -3,7 +3,21 @@
 
 Dex++ is an extended version of Moon's Dex, made to fulfill some Moon's Dex prophecy.
 
-## Latest Version Script
+## This Fork: Tags and Quality of Life
+
+- Search for an exact, case-sensitive CollectionService tag with `/tag Enemy` or `/tag "Quest Item"`.
+- Combine tag filters with existing searches: `/tag Enemy && /isa Model`, `/tag Enemy || /tag Boss`, or `!(/tag Enemy || /remotes)`.
+- Select objects to see their tags in **Properties → Tags**. A checked box means the tag is present; a mixed box means only some selected objects have it. Check a box to add the tag to every selected object, or uncheck it to remove the tag from the selection.
+- Use **Add Tag** to add a new tag, including to objects with no tags. The menu beside each tag can find matching objects, add/remove the tag across the selection, and copy a tag name or the first selected object's sorted tag list when clipboard support is available.
+- Tag lists update as tags change. Tag searches update when **AutoUpdateSearch** is enabled. CollectionService signals track objects in the DataModel; reselect an unparented object to refresh external tag changes on it.
+- The search reset buttons and Escape now clear searches. Invalid expressions turn the Explorer search text red and retain the previous results.
+- Fixed search escaping and boolean precedence, false attribute values when renaming, and the `cloneref` fallback. Tag event bursts are coalesced, unused subscriptions are disconnected, and the build uses sorted modules and buffered output.
+
+Tag edits apply in the running client. Server updates and streaming can overwrite client-side tags, as described in the [CollectionService documentation](https://create.roblox.com/docs/reference/engine/classes/CollectionService).
+
+Build this fork locally using the instructions below to use these changes. The upstream release loader is preserved here for reference and does not include this fork's changes.
+
+## Upstream Latest Version Script
 ```lua
 loadstring(game:HttpGet("https://github.com/AZYsGithub/DexPlusPlus/releases/latest/download/out.lua"))()
 ```
@@ -25,10 +39,20 @@ Here are the features that were added/fixed in Dex++
 - CodeFrame cursor offset (where cursor on textbox were not aligned properly)
 
 ## To Build
-1. Download this repository
-2. Ensure you have Python 3 (I use 3.9.0)
-3. Run build.py
-4. The executable script will be created as out.lua
+1. Clone or download this fork.
+2. Install Python 3.9+ (or [uv](https://docs.astral.sh/uv/)).
+3. Run `uv run --system-certs --no-project build.py` (or `python build.py`). The command also works from another directory when given the full path to `build.py`.
+4. The executable script is created as `out.lua` beside `build.py`. Run that script in your Roblox environment. The generated file is excluded from Git.
+
+## Regression Tests
+
+Install the official [Luau CLI tools](https://github.com/luau-lang/luau/releases) so `luau` and `luau-compile` are on your PATH, then run:
+
+```sh
+uv run --system-certs --no-project tests/run.py
+```
+
+This builds twice to check reproducibility, compiles all modules and `out.lua`, and runs regression tests against the actual Lua modules with a mocked Roblox API. Live Roblox rendering and executor compatibility still require an in-game smoke test. Basic `/tag` searches also work without an elevated environment; compound filters use the existing elevated search compiler.
 
 ## About Dex Roadmap
 The concept of the Dex roadmap is amazing, however neither me nor Moon have the ability to fulfil the full roadmap. I did have added few stuffs in my fork but mostly of them are beyond my limit and i did this project for fun.
