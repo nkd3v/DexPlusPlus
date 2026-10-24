@@ -348,4 +348,160 @@ test("cloneref fallback returns the reference and scans the registry once",funct
 	assert(scans == 1 and #probes == 1 and probes[1].Destroyed)
 	assert(refs[1] == nil)
 end)
+-- Spatial mocks exercise the real menu callback, including root/pivot offsets.
+local spatialVector = {}
+local function v3(x,y,z)
+	return setmetatable({X = x,Y = y,Z = z},spatialVector)
+end
+spatialVector.__add = function(a,b) return v3(a.X+b.X,a.Y+b.Y,a.Z+b.Z) end
+spatialVector.__sub = function(a,b) return v3(a.X-b.X,a.Y-b.Y,a.Z-b.Z) end
+local spatialFrame = {}
+local function frame(position,right,up,look)
+	return setmetatable({Position = position,RightVector = right or v3(1,0,0),UpVector = up or v3(0,1,0),LookVector = look or v3(0,0,-1)},spatialFrame)
+end
+spatialFrame.__add = function(cf,delta)
+	return frame(cf.Position+delta,cf.RightVector,cf.UpVector,cf.LookVector)
+end
+local function samePosition(actual,expected)
+	assert(math.abs(actual.X-expected.X) < 0.0001 and math.abs(actual.Y-expected.Y) < 0.0001 and math.abs(actual.Z-expected.Z) < 0.0001,
+		`Expected ({expected.X}, {expected.Y}, {expected.Z}), got ({actual.X}, {actual.Y}, {actual.Z})`)
+end
+local function spatialPart(position,collidable)
+	return {
+		Position = position,CFrame = frame(position),Size = v3(2,4,2),CanCollide = collidable or false,
+		IsA = function(_,class) return class == "BasePart" end,
+	}
+end
+local function spatialModel(part,pivot,primary)
+	return {
+		PrimaryPart = primary,WorldPivot = pivot or frame(v3(0,0,0)),
+		IsA = function(_,class) return class == "Model" end,
+		FindFirstChildWhichIsA = function(_,class,recursive)
+			assert(class == "BasePart" and recursive, "Must search nested model parts")
+			return part
+		end,
+		GetPivot = function(self) return self.WorldPivot end,
+	}
+end
+local function teleportFixture()
+	local root = spatialPart(v3(10,10,10))
+	root.Size = v3(2,2,1)
+	root.AssemblyLinearVelocity,root.AssemblyAngularVelocity = v3(15,-30,5),v3(1,2,3)
+	local humanoid = {RootPart = root}
+	local character = {PrimaryPart = root,Moves = 0}
+	character.Pivot = frame(root.Position+v3(2,1,0),v3(0,0,-1),v3(0,1,0),v3(-1,0,0))
+	character.CompanionPosition = root.Position+v3(0,2,0)
+	function character:FindFirstChild(name) return name == "HumanoidRootPart" and self.NamedRoot or nil end
+	function character:FindFirstChildWhichIsA(class) return class == "Humanoid" and humanoid or self.FallbackRoot end
+	function character:GetPivot() return self.Pivot end
+	function character:GetBoundingBox() return frame(root.Position+v3(0,-0.5,0)),v3(4,6,2) end
+	function character:MoveTo() error("Teleport must not use obstruction-dependent MoveTo") end
+	function character:PivotTo(destination)
+		if self.RejectMove then error("Move denied") end
+		local delta = destination.Position-self.Pivot.Position
+		root.Position,root.CFrame = root.Position+delta,root.CFrame+delta
+		self.CompanionPosition = self.CompanionPosition+delta
+		self.Pivot,self.Moves = destination,self.Moves+1
+	end
+	local player,warnings,registered = {Character = character},{},{}
+	local selection = {List = {}}
+	local config = {Explorer = {}}
+	local env = setmetatable({
+		Vector3 = {new = v3},selection = selection,nodes = {},
+		warn = function(message) warnings[#warnings+1] = message end,
+	}, {__index = environment})
+	local chunk = assert(loadstring(sources.Explorer,"ExplorerTeleport"))
+	setfenv(chunk,env)
+	local control = chunk()
+	local data = table.clone(deps)
+	data.plr,data.Settings = player,config
+	data.Lib = {ContextMenu = {new = function()
+		return {Register = function(_,name,item) registered[name] = item end}
+	end}}
+	control.InitDeps(data)
+	local explorer = control.Main()
+	explorer.InitRightClick()
+	assert(registered.TELEPORT_TO.OnClick == explorer.TeleportToSelection)
+	return {Root = root,Humanoid = humanoid,Character = character,Player = player,Warnings = warnings,
+		Selection = selection,Settings = config,Click = registered.TELEPORT_TO.OnClick}
+end
+test("teleport moves the full custom rig, preserves rotation and pivot offset, and clears momentum",function()
+	local f = teleportFixture()
+	local rotation = f.Character.Pivot.RightVector
+	f.Selection.List = {{Obj = spatialPart(v3(100,20,30))}}
+	assert(f.Click())
+	samePosition(f.Root.Position,v3(100,20,30))
+	samePosition(f.Character.Pivot.Position,v3(102,21,30))
+	samePosition(f.Character.CompanionPosition,v3(100,22,30))
+	assert(f.Character.Pivot.RightVector == rotation and f.Character.Moves == 1)
+	samePosition(f.Root.AssemblyLinearVelocity,v3(0,0,0))
+	samePosition(f.Root.AssemblyAngularVelocity,v3(0,0,0))
+end)
+test("solid teleport targets get surface clearance without MoveTo",function()
+	local f = teleportFixture()
+	f.Selection.List = {{Obj = spatialPart(v3(100,20,30),true)}}
+	assert(f.Click())
+	samePosition(f.Root.Position,v3(100,26.5,30))
+end)
+test("teleport accounts for rotated solid targets and configured world offset",function()
+	local f = teleportFixture()
+	local target = spatialPart(v3(100,20,30),true)
+	target.Size,target.CFrame = v3(8,2,2),frame(target.Position,v3(0,1,0),v3(-1,0,0))
+	f.Settings.Explorer.TeleportToOffset = v3(3,5,-2)
+	f.Selection.List = {{Obj = target}}
+	assert(f.Click())
+	samePosition(f.Root.Position,v3(103,33.5,28))
+end)
+test("nested model targets work without a PrimaryPart or cached Explorer node",function()
+	local f = teleportFixture()
+	f.Selection.List = {{Obj = spatialModel(spatialPart(v3(150,25,75)))}}
+	assert(f.Click())
+	samePosition(f.Root.Position,v3(150,25,75))
+end)
+test("model PrimaryPart wins over other descendants",function()
+	local f = teleportFixture()
+	f.Selection.List = {{Obj = spatialModel(spatialPart(v3(0,0,0)),nil,spatialPart(v3(150,25,75)))}}
+	assert(f.Click())
+	samePosition(f.Root.Position,v3(150,25,75))
+end)
+test("empty model pivot is used once and later selected targets do not override it",function()
+	local f = teleportFixture()
+	f.Selection.List = {{Obj = object("Folder")},{Obj = spatialModel(nil,frame(v3(100,50,25)))},{Obj = spatialPart(v3(200,0,0))}}
+	f.Selection.List[1].Obj.IsA = function() return false end
+	assert(f.Click())
+	samePosition(f.Root.Position,v3(100,50,25))
+	assert(f.Character.Moves == 1)
+end)
+test("teleport falls back to named, primary, or descendant roots",function()
+	for _,field in ipairs({"NamedRoot","PrimaryPart","FallbackRoot"}) do
+		local f = teleportFixture()
+		f.Humanoid.RootPart,f.Character.PrimaryPart = nil,nil
+		f.Character[field] = f.Root
+		f.Selection.List = {{Obj = spatialPart(v3(100,20,30))}}
+		assert(f.Click())
+		samePosition(f.Root.Position,v3(100,20,30))
+	end
+end)
+test("teleport reports absent characters and roots, then works after respawn",function()
+	local f = teleportFixture()
+	f.Selection.List = {{Obj = spatialPart(v3(100,20,30))}}
+	f.Player.Character = nil
+	assert(not f.Click())
+	assert(#f.Warnings == 1 and string.find(f.Warnings[1],"respawning",1,true))
+	f.Player.Character = f.Character
+	f.Humanoid.RootPart,f.Character.PrimaryPart = nil,nil
+	assert(not f.Click())
+	assert(#f.Warnings == 2 and string.find(f.Warnings[2],"no root part",1,true))
+	f.Humanoid.RootPart = f.Root
+	assert(f.Click())
+end)
+test("teleport reports failed movement and unsupported selections",function()
+	local f = teleportFixture()
+	assert(not f.Click())
+	f.Selection.List = {{Obj = spatialPart(v3(100,20,30))}}
+	f.Character.RejectMove = true
+	assert(not f.Click())
+	assert(#f.Warnings == 2 and string.find(f.Warnings[2],"Move denied",1,true))
+	assert(f.Character.Moves == 0)
+end)
 print(count.." regression tests passed.")

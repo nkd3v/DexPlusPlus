@@ -974,6 +974,52 @@ local function main()
 		context:Show(Mouse.X, Mouse.Y)
 	end
 
+	Explorer.TeleportToSelection = function()
+		local success,reason = pcall(function()
+			local character = plr.Character
+			if not character then error("Your character is unavailable. Try again after respawning.",0) end
+			local humanoid = character:FindFirstChildWhichIsA("Humanoid")
+			local root = (humanoid and humanoid.RootPart) or character:FindFirstChild("HumanoidRootPart") or character.PrimaryPart
+			if not root or not root:IsA("BasePart") then
+				root = character:FindFirstChildWhichIsA("BasePart",true)
+			end
+			if not root then error("Your character has no root part yet. Try again after it loads.",0) end
+
+			local position,part
+			for _,node in ipairs(selection.List) do
+				local obj = node.Obj
+				if obj:IsA("BasePart") then
+					part = obj
+				elseif obj:IsA("Model") then
+					-- Explorer's tree may lag behind replication or omit streamed descendants.
+					part = obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart",true)
+					if not part then position = obj:GetPivot().Position end
+				end
+				if part then position = part.Position end
+				if position then break end
+			end
+			if not position then error("Select a part or model to teleport to.",0) end
+
+			if part and part.CanCollide then
+				local function verticalRadius(cf,size)
+					return (math.abs(cf.RightVector.Y)*size.X + math.abs(cf.UpVector.Y)*size.Y + math.abs(cf.LookVector.Y)*size.Z)/2
+				end
+				local bounds,size = character:GetBoundingBox()
+				local bottom = bounds.Position.Y - verticalRadius(bounds,size)
+				local clearance = math.max(root.Size.Y/2,root.Position.Y-bottom) + 1
+				position = position + Vector3.new(0,verticalRadius(part.CFrame,part.Size)+clearance,0)
+			end
+			position = position + (Settings.Explorer.TeleportToOffset or Vector3.new(0,0,0))
+			-- Translate the whole rig, keeping its rotation and root-to-pivot offset.
+			-- MoveTo searches upward through obstructions and can land far from the target.
+			character:PivotTo(character:GetPivot() + (position-root.Position))
+			root.AssemblyLinearVelocity = Vector3.new(0,0,0)
+			root.AssemblyAngularVelocity = Vector3.new(0,0,0)
+		end)
+		if not success then warn("Dex++: Teleport To failed: "..tostring(reason)) end
+		return success,reason
+	end
+
 	Explorer.InitRightClick = function()
 		local context = Lib.ContextMenu.new()
 
@@ -1177,46 +1223,7 @@ local function main()
 			end
 		end})
 
-		context:Register("TELEPORT_TO",{Name = "Teleport To", IconMap = Explorer.MiscIcons, Icon = "TeleportTo", OnClick = function()
-			local sList = selection.List
-			local plrRP = plr.Character and plr.Character:FindFirstChild("HumanoidRootPart")
-
-			if not plrRP then return end
-
-			for _,node in next, sList do
-				local Obj = node.Obj
-
-				if Obj:IsA("BasePart") then
-					if Obj.CanCollide then
-						plr.Character:MoveTo(Obj.Position)
-					else
-						plrRP.CFrame = CFrame.new(Obj.Position)
-					end
-					break
-				elseif Obj:IsA("Model") then
-					if Obj.PrimaryPart then
-						if Obj.PrimaryPart.CanCollide then
-							plr.Character:MoveTo(Obj.PrimaryPart.Position)
-						else
-							plrRP.CFrame = CFrame.new(Obj.PrimaryPart.Position)
-						end
-						break
-					else
-						local part = Obj:FindFirstChildWhichIsA("BasePart", true)
-						if part and nodes[part] then
-							if part.CanCollide then
-								plr.Character:MoveTo(part.Position)
-							else
-								plrRP.CFrame = CFrame.new(part.Position)
-							end
-							break
-						elseif Obj.WorldPivot then
-							plrRP.CFrame = Obj.WorldPivot
-						end
-					end
-				end
-			end
-		end})
+		context:Register("TELEPORT_TO",{Name = "Teleport To", IconMap = Explorer.MiscIcons, Icon = "TeleportTo", OnClick = Explorer.TeleportToSelection})
 
 		local OldAnimation
 		context:Register("PLAY_TWEEN",{Name = "Play Tween", IconMap = Explorer.MiscIcons, Icon = "Play", OnClick = function()
