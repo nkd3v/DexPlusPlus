@@ -3,7 +3,7 @@
 
 Dex++ is an extended version of Moon's Dex, made to fulfill some Moon's Dex prophecy.
 
-## This Fork: Tags and Quality of Life
+## Tags and Quality of Life
 
 - Search for an exact, case-sensitive CollectionService tag with `/tag Enemy` or `/tag "Quest Item"`.
 - Combine tag filters with existing searches: `/tag Enemy && /isa Model`, `/tag Enemy || /tag Boss`, or `!(/tag Enemy || /remotes)`.
@@ -15,13 +15,13 @@ Dex++ is an extended version of Moon's Dex, made to fulfill some Moon's Dex prop
 
 Tag edits apply in the running client. Server updates and streaming can overwrite client-side tags, as described in the [CollectionService documentation](https://create.roblox.com/docs/reference/engine/classes/CollectionService).
 
-Build this fork locally using the instructions below to use these changes. The upstream release loader is preserved here for reference and does not include this fork's changes.
+The latest release includes these changes. Use the script below or build locally using the instructions below.
 
-## Upstream Latest Version Script
+## Latest Version Script
 ```lua
-loadstring(game:HttpGet("https://github.com/AZYsGithub/DexPlusPlus/releases/latest/download/out.lua"))()
+loadstring(game:HttpGet("https://github.com/nkd3v/DexPlusPlus/releases/latest/download/out.lua"))()
 ```
-For specific versions, go to [releases](https://github.com/AZYsGithub/DexPlusPlus/releases).
+For specific versions, go to [releases](https://github.com/nkd3v/DexPlusPlus/releases).
 
 ## What's the difference between Dex and Dex++?
 Since the original Dex is the last release and Moon have discontinued it, it still has some missing features.
@@ -39,7 +39,7 @@ Here are the features that were added/fixed in Dex++
 - CodeFrame cursor offset (where cursor on textbox were not aligned properly)
 
 ## To Build
-1. Clone or download this fork.
+1. Clone or download this repository.
 2. Install Python 3.9+ (or [uv](https://docs.astral.sh/uv/)).
 3. Run `uv run --system-certs --no-project build.py` (or `python build.py`). The command also works from another directory when given the full path to `build.py`.
 4. The executable script is created as `out.lua` beside `build.py`. Run that script in your Roblox environment. The generated file is excluded from Git.
@@ -73,7 +73,7 @@ Every donation is highly apreciated, this is compeletely optional.
 - [Shiny](https://github.com/rocult/shiny)/[Medal](https://github.com/shrimp-nz/medal)
 
 ## License
-[![Dex++ License](https://img.shields.io/badge/Dex++-License-green)](https://github.com/AZYsGithub/DexPlusPlus/blob/main/LICENSE)
+[![Dex++ License](https://img.shields.io/badge/Dex++-License-green)](./LICENSE)
 
 [![USSI License](https://img.shields.io/badge/USSI-License-green)](https://github.com/luau/UniversalSynSaveInstance/blob/main/LICENSE)
 

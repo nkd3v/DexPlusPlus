@@ -1,6 +1,6 @@
 --[[
 	Dex++
-	Version 3.0
+	Version 3.1.0
 	
 	Developed by Chillz
 	
