@@ -28,7 +28,7 @@ def main() -> None:
     )
     sources = {
         name: (ROOT / "modules" / f"{name}.lua").read_text(encoding="utf-8")
-        for name in ("Explorer", "Properties", "Tags")
+        for name in ("Explorer", "Properties", "TagList", "Tags")
     }
     main_source = (ROOT / "main.lua").read_text(encoding="utf-8")
     header_source = (ROOT / "header.lua").read_text(encoding="utf-8")

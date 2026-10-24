@@ -53,6 +53,7 @@ local function main()
 	local renameBox,renamingNode,searchFunc
 	local tagSearchConnection,searchRefreshPending
 	local activeQuery = ""
+	local searchListeners = {}
 	local sortingEnabled,autoUpdateSearch = nil,Settings.Explorer.AutoUpdateSearch
 	local table,math = table,math
 	local nilMap,nilCons = {},{}
@@ -2183,6 +2184,7 @@ return search]==]
 			end
 		end
 		Explorer.SearchError = nil
+		local queryChanged = activeQuery ~= query
 		activeQuery = query
 		if Explorer.GuiElems.SearchBar then
 			Explorer.GuiElems.SearchBar.TextColor3 = Settings.Theme.Text
@@ -2268,7 +2270,46 @@ return search]==]
 			tagSearchConnection = Apps.Tags.Watch(function() Explorer.QueueSearchRefresh() end,tagNames)
 		end
 		Explorer.ForceUpdate()
+		if queryChanged then
+			for _,listener in ipairs(table.clone(searchListeners)) do
+				listener(query)
+			end
+		end
 		return true
+	end
+
+	-- Calls back with the new query whenever the active search changes.
+	Explorer.OnSearchChanged = function(callback)
+		searchListeners[#searchListeners+1] = callback
+		return {Disconnect = function()
+			local index = table.find(searchListeners,callback)
+			if index then table.remove(searchListeners,index) end
+		end}
+	end
+
+	Explorer.GetSearchQuery = function()
+		return activeQuery
+	end
+
+	-- Quote delimiters so tag names containing &&, || or parentheses are literal.
+	Explorer.TagQuery = function(tag)
+		return "/tag "..string.format("%q",tag)
+	end
+
+	-- Returns the tag when the active search is exactly one tag filter.
+	Explorer.GetSearchTag = function(query)
+		local term = (query or activeQuery):match("^/[Tt][Aa][Gg]%s+(.+)$")
+		if not term then return nil end
+		local unquoted = Explorer.UnquoteSearchTerm(term)
+		if unquoted then return unquoted end
+		if term:find("[%s&|()!\"]") then return nil end
+		return term
+	end
+
+	Explorer.SearchTag = function(tag)
+		local query = Explorer.TagQuery(tag)
+		if Explorer.GuiElems.SearchBar then Explorer.GuiElems.SearchBar.Text = query end
+		return Explorer.DoSearch(query)
 	end
 
 	Explorer.QueueSearchRefresh = function()

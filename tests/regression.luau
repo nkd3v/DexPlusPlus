@@ -43,6 +43,11 @@ function collection:GetAllTags()
 	for tag,objects in pairs(tagged) do if next(objects) then result[#result+1] = tag end end
 	return result
 end
+function collection:GetTagged(tag)
+	local result = {}
+	for obj in pairs(tagged[tag] or {}) do result[#result+1] = obj end
+	return result
+end
 function collection:GetTags(obj)
 	local result = {}
 	for tag,objects in pairs(tagged) do if objects[obj] then result[#result+1] = tag end end
@@ -124,9 +129,11 @@ end
 loadModule("Tags")
 local explorerControl = loadModule("Explorer")
 local propertiesControl = loadModule("Properties")
+local tagListControl = loadModule("TagList")
 explorerControl.InitAfterMain()
 propertiesControl.InitAfterMain()
-local Tags,Explorer,Properties = apps.Tags,apps.Explorer,apps.Properties
+tagListControl.InitAfterMain()
+local Tags,Explorer,Properties,TagList = apps.Tags,apps.Explorer,apps.Properties,apps.TagList
 Explorer.SearchExpanded,Explorer.Expanded = {},{}
 Explorer.GuiElems.SearchBar = {Text = ""}
 Explorer.Selection = {List = {}}
@@ -316,6 +323,93 @@ test("editing a false attribute preserves false and same-name changes survive",f
 	Properties.SetProp(invalid,true,true,new)
 	assert(red.Attributes.New == false, "A failed rename must preserve the original attribute")
 	red.RejectAttribute = nil
+end)
+test("explorer exposes single-tag searches and reports only query changes",function()
+	local queries = {}
+	local connection = Explorer.OnSearchChanged(function(query) queries[#queries+1] = query end)
+	assert(Explorer.SearchTag("Quest Item"))
+	assert(Explorer.GuiElems.SearchBar.Text == '/tag "Quest Item"')
+	assert(Explorer.GetSearchTag() == "Quest Item")
+	assert(Explorer.DoSearch('/tag "Quest Item"'))
+	assert(#queries == 1 and queries[1] == '/tag "Quest Item"')
+	assert(Explorer.GetSearchTag("/tag Enemy") == "Enemy")
+	assert(Explorer.GetSearchTag("/tag Enemy && /isa Model") == nil)
+	assert(Explorer.GetSearchTag("Enemy") == nil)
+	for _,tag in ipairs({'A && (B)', 'say "hi"', [[back\slash]]}) do
+		assert(Explorer.GetSearchTag(Explorer.TagQuery(tag)) == tag,tag)
+	end
+	Explorer.ClearSearch()
+	assert(#queries == 2 and queries[2] == "")
+	connection:Disconnect()
+	Explorer.SearchTag("Other")
+	Explorer.ClearSearch()
+	assert(#queries == 2)
+end)
+
+local function tagEntry(tag)
+	for index,entry in ipairs(TagList.GetEntries()) do
+		if entry.Tag == tag then return entry,index end
+	end
+end
+test("tag list counts tagged objects, sorts and filters names, and hides unused tags",function()
+	collection:AddTag(red,"ListA")
+	collection:AddTag(blue,"ListA")
+	collection:AddTag(red,"listb")
+	TagList.SetActive(true)
+	local a,aIndex = tagEntry("ListA")
+	local b,bIndex = tagEntry("listb")
+	assert(a.Count == 2 and b.Count == 1 and aIndex < bIndex)
+	TagList.SetFilter("LISTB")
+	local entries = TagList.GetEntries()
+	assert(#entries == 1 and entries[1].Tag == "listb")
+	TagList.SetFilter("")
+	collection:AddTag(remote,"ListA")
+	flush()
+	assert(tagEntry("ListA").Count == 3)
+	collection:RemoveTag(red,"listb")
+	flush()
+	assert(tagEntry("listb") == nil)
+	collection:AddTag(red,"ListC")
+	flush()
+	assert(tagEntry("ListC").Count == 1)
+	TagList.SetActive(false)
+end)
+test("tag list stops tracking while closed and recounts when reopened",function()
+	assert(not TagList.IsActive())
+	collection:AddTag(blue,"ListC")
+	flush()
+	assert(tagEntry("ListC").Count == 1)
+	assert(added.ListC:Count() == 0 and removed.ListC:Count() == 0)
+	TagList.SetActive(true)
+	assert(tagEntry("ListC").Count == 2)
+	TagList.SetActive(false)
+end)
+test("selecting a tag filters the explorer and selecting it again clears the filter",function()
+	local plain = object("Plain")
+	local plainNode = node(plain,root)
+	TagList.AttachExplorer()
+	TagList.SetActive(true)
+	TagList.SelectTag("ListA")
+	assert(Explorer.GetSearchQuery() == '/tag "ListA"' and TagList.GetSelectedTag() == "ListA")
+	assert(Explorer.SearchExpanded[blueNode] == 0 and Explorer.SearchExpanded[remoteNode] == 0)
+	assert(Explorer.SearchExpanded[plainNode] == nil)
+	TagList.SelectTag("ListC")
+	assert(TagList.GetSelectedTag() == "ListC" and Explorer.SearchExpanded[remoteNode] == nil)
+	TagList.SelectTag("ListC")
+	assert(Explorer.GetSearchQuery() == "" and TagList.GetSelectedTag() == nil)
+	assert(not next(Explorer.SearchExpanded))
+	plainNode.Del = true
+	TagList.SetActive(false)
+end)
+test("tag list selection follows searches typed into the explorer",function()
+	assert(Explorer.DoSearch("/tag ListA"))
+	assert(TagList.GetSelectedTag() == "ListA")
+	assert(Explorer.DoSearch("Red"))
+	assert(TagList.GetSelectedTag() == nil)
+	assert(Explorer.DoSearch('/tag "Ghost Tag"'))
+	assert(tagEntry("Ghost Tag").Count == 0)
+	Explorer.ClearSearch()
+	assert(tagEntry("Ghost Tag") == nil and TagList.GetSelectedTag() == nil)
 end)
 test("embedded module return values take priority over legacy global exports",function()
 	local main = {Elevated = true, AppControls = {}, GetInitDeps = function() return deps end}
