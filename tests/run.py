@@ -31,7 +31,9 @@ def main() -> None:
         for name in ("Explorer", "Properties", "Tags")
     }
     main_source = (ROOT / "main.lua").read_text(encoding="utf-8")
-    sources["Cloneref"] = main_source.split("local isFsSupported", 1)[0] + "\nreturn cloneref"
+    header_source = (ROOT / "header.lua").read_text(encoding="utf-8")
+    sources["Cloneref"] = header_source.split("local oldgame =", 1)[0] + "\nreturn cloneref"
+    sources["Header"] = header_source + "\nreturn {Game = game, OldGame = oldgame}"
     sources["Loader"] = (
         main_source.split("\tMain.LoadModule = function", 1)[1]
         .split("\tMain.LoadPluginFile = function", 1)[0]

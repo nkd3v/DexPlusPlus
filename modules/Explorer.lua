@@ -38,6 +38,12 @@ local function main()
 	local expanded
 	local entryTemplate,treeFrame,toolBar,descendantAddedCon,descendantRemovingCon,itemChangedCon
 	local ffa = game.FindFirstAncestorWhichIsA
+	local function getParent(obj)
+		local parent = ffa(obj,"Instance")
+		-- Equal cloneref handles can still be different table keys.
+		if parent == game then return game end
+		return parent
+	end
 	local getDescendants = game.GetDescendants
 	local getTextSize = service.TextService.GetTextSize
 	local updateDebounce,refreshDebounce = false,false
@@ -61,7 +67,7 @@ local function main()
 		if nodes[root] then return end
 
 		local isNil = false
-		local rootParObj = ffa(root,"Instance")
+		local rootParObj = getParent(root)
 		local par = nodes[rootParObj]
 
 		-- Nil Handling
@@ -126,7 +132,7 @@ local function main()
 			local obj = insts[i]
 			if nodes[obj] then continue end -- Deferred
 
-			local par = nodes[ffa(obj,"Instance")]
+			local par = nodes[getParent(obj)]
 			if not par then continue end
 			local newNode = {Obj = obj, Parent = par}
 			nodes[obj] = newNode
@@ -197,7 +203,7 @@ local function main()
 		if not node then return end
 
 		local oldPar = node.Parent
-		local newPar = nodes[ffa(obj,"Instance")]
+		local newPar = nodes[getParent(obj)]
 		if oldPar == newPar then return end
 
 		-- Nil Handling
@@ -2660,7 +2666,7 @@ return search]==]
 		if Main.Elevated then
 			for i = 1,#insts do
 				local obj = insts[i]
-				local par = nodes[ffa(obj,"Instance")]
+				local par = nodes[getParent(obj)]
 				if not par then continue end
 				local newNode = {
 					Obj = obj,
@@ -2672,7 +2678,7 @@ return search]==]
 		else
 			for i = 1,#insts do
 				local obj = insts[i]
-				local s,parObj = pcall(ffa,obj,"Instance")
+				local s,parObj = pcall(getParent,obj)
 				local par = nodes[parObj]
 				if not par then continue end
 				local newNode = {

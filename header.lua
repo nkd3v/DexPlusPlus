@@ -1,6 +1,6 @@
 --[[
 	Dex++
-	Version 3.1.1
+	Version 3.1.2
 	
 	Developed by Chillz
 	
@@ -10,38 +10,35 @@
 local selection
 local nodes = {}
 
-cloneref = cloneref or function(ref)
-	if not getreg then return ref end
-	
-	local InstanceList
-	
-	local a = Instance.new("Part")
-	for _, c in pairs(getreg()) do
-		if type(c) == "table" and #c then
-			if rawget(c, "__mode") == "kv" then
-				for d, e in pairs(c) do
-					if e == a then
-						InstanceList = c
-						break
+cloneref = cloneref or (function()
+	local instanceList
+	local scanned = false
+	return function(ref)
+		if not getreg then return ref end
+		if not scanned then
+			scanned = true
+			local probe = Instance.new("Part")
+			local ok,registry = pcall(getreg)
+			if ok and type(registry) == "table" then
+				for _,value in pairs(registry) do
+					if type(value) == "table" and rawget(value,"__mode") == "kvs" then
+						for _,obj in pairs(value) do
+							if obj == probe then instanceList = value break end
+						end
 					end
+					if instanceList then break end
 				end
 			end
+			probe:Destroy()
 		end
-	end
-	local f = {}
-	function f.invalidate(g)
-		if not InstanceList then
-			return
-		end
-		for b, c in pairs(InstanceList) do
-			if c == g then
-				InstanceList[b] = nil
-				return g
+		if instanceList then
+			for key,obj in pairs(instanceList) do
+				if obj == ref then instanceList[key] = nil break end
 			end
 		end
+		return ref
 	end
-	return f.invalidate
-end
+end)()
 
 local oldgame = cloneref(game)
 local game = cloneref(workspace.Parent)

@@ -348,6 +348,102 @@ test("cloneref fallback returns the reference and scans the registry once",funct
 	assert(scans == 1 and #probes == 1 and probes[1].Destroyed)
 	assert(refs[1] == nil)
 end)
+test("built header fallback preserves game references without registry support",function()
+	for _,registry in ipairs({false,function() return {} end,function() error("Registry unavailable") end}) do
+		local env = setmetatable({
+			game = game, workspace = {Parent = game}, getreg = registry or nil,
+			Instance = {new = function() return {Destroy = function() end} end},
+		}, {__index = getfenv()})
+		local chunk = assert(loadstring(sources.Header))
+		setfenv(chunk,env)
+		local refs = chunk()
+		assert(rawequal(refs.Game,game) and rawequal(refs.OldGame,game))
+	end
+end)
+
+local function explorerTreeFixture(elevated)
+	-- Model distinct cloneref handles that compare equal but hash separately.
+	local mt = {__eq = function(a,b) return a.Identity == b.Identity end}
+	local actualGame = setmetatable({Identity = "game"},mt)
+	local gameRef = setmetatable({Identity = "game"},mt)
+	assert(actualGame == gameRef and not rawequal(actualGame,gameRef))
+	local all = {}
+	local function instance(name,parent)
+		local obj = object(name)
+		obj.Parent = parent
+		all[#all+1] = obj
+		return obj
+	end
+	local workspace = instance("Workspace",actualGame)
+	local folder = instance("Folder",workspace)
+	local part = instance("Part",folder)
+	gameRef.FindFirstAncestorWhichIsA = function(obj) return obj.Parent end
+	gameRef.GetDescendants = function(root)
+		local result = {}
+		for _,obj in ipairs(all) do
+			local parent = obj.Parent
+			while parent do
+				if parent == root then result[#result+1] = obj break end
+				parent = parent.Parent
+			end
+		end
+		return result
+	end
+	gameRef.DescendantAdded,gameRef.DescendantRemoving,gameRef.ItemChanged = signal(),signal(),signal()
+	local function gui()
+		return setmetatable({}, {__index = function(self,key)
+			local child = gui()
+			rawset(self,key,child)
+			return child
+		end})
+	end
+	local window = {GuiElems = gui(), OnActivate = signal(), OnRestore = signal(), OnDeactivate = signal(), OnMinimize = signal(), SetTitle = function() end}
+	window.GuiElems.Main.GetPropertyChangedSignal = function() return signal() end
+	local data = table.clone(deps)
+	data.Main = {Elevated = elevated}
+	data.Settings = {Explorer = {Sorting = false}}
+	data.env = {getnilinstances = function() return {} end}
+	data.create = function() return gui() end
+	data.Lib = {
+		IconMap = {newLinear = function() return {} end},
+		Set = {new = function() return {Changed = signal()} end},
+		ScrollBar = {new = function() return {Gui = {}, Scrolled = signal(), SetScrollFrame = function() end} end},
+		Window = {new = function() return window end},
+	}
+	local env = setmetatable({game = gameRef, nodes = {}, Color3 = {new = function() end,fromRGB = function() end}}, {__index = environment})
+	local chunk = assert(loadstring(sources.Explorer))
+	setfenv(chunk,env)
+	local control = chunk()
+	control.InitDeps(data)
+	local explorer = control.Main()
+	control.InitAfterMain()
+	for _,method in ipairs({"InitRightClick","InitInsertObject","InitEntryTemplate","InitRenameBox","InitSearch","InitDelCleaner","PerformUpdate","PerformRefresh"}) do
+		explorer[method] = function() end
+	end
+	explorer.Init()
+	return {Explorer = explorer, Nodes = env.nodes, Game = gameRef, ActualGame = actualGame,
+		Workspace = workspace, Folder = folder, Part = part, Instance = instance}
+end
+
+for _,elevated in ipairs({true,false}) do
+	test("explorer startup attaches services with cloned game handles (elevated="..tostring(elevated)..")",function()
+		local f = explorerTreeFixture(elevated)
+		local nodes = f.Nodes
+		assert(#nodes[f.Game] == 1 and nodes[f.Game][1].Obj == f.Workspace)
+		assert(nodes[f.Folder].Parent == nodes[f.Workspace])
+		assert(nodes[f.Part].Parent == nodes[f.Folder])
+		assert(f.Explorer.Expanded[nodes[f.Game]])
+		local service = f.Instance("ReplicatedStorage",f.ActualGame)
+		local nested = f.Instance("Nested",service)
+		f.Game.DescendantAdded:Fire(service)
+		assert(nodes[service].Parent == nodes[f.Game] and nodes[nested].Parent == nodes[service])
+		f.Part.Parent = f.ActualGame
+		f.Game.ItemChanged:Fire(f.Part,"Parent")
+		assert(nodes[f.Part].Parent == nodes[f.Game] and #nodes[f.Folder] == 0)
+		f.Game.DescendantRemoving:Fire(service)
+		assert(nodes[service] == nil and nodes[nested] == nil)
+	end)
+end
 -- Spatial mocks exercise the real menu callback, including root/pivot offsets.
 local spatialVector = {}
 local function v3(x,y,z)
